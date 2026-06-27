@@ -90,10 +90,24 @@ struct syscache_info
 
 	void clear(bool remove_root, bool lock = false) const noexcept
 	{
+		// Windows cannot delete files that are still open by the guest, so
+		// vfs::host::remove_all() fails with "Access violation" and the game hangs
+		// in cellSysCacheClear (e.g. CoD: Black Ops re-clears its cache on boot).
+		// Close + poison any still-open cache files first (matching Unix
+		// unlink-while-open semantics) so the clear can actually succeed.
+		idm::select<lv2_fs_object, lv2_file>([](u32 /*id*/, lv2_file& file)
+		{
+			if (file.file && file.mp->flags & lv2_mp_flag::cache)
+			{
+				file.file.close();
+				file.lock = 2;
+			}
+		});
+
 		// Clear cache
 		if (!vfs::host::remove_all(cache_root + cache_id, cache_root, &g_mp_sys_dev_hdd1, remove_root, lock))
 		{
-			cellSysutil.fatal("cellSysCache: failed to clear cache directory '%s%s' (%s)", cache_root, cache_id, fs::g_tls_error);
+			cellSysutil.error("cellSysCache: failed to clear cache directory '%s%s' (%s)", cache_root, cache_id, fs::g_tls_error);
 		}
 
 		// Poison opened files in /dev_hdd1 to return CELL_EIO on access
